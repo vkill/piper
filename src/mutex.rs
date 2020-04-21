@@ -1,45 +1,54 @@
 use std::cell::UnsafeCell;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 
 use crate::event::Event;
 
-/// An asynchronous mutex.
+use crossbeam_utils::Backoff;
+use futures::io::{self, AsyncRead, AsyncWrite};
+
+/// A mutex that implements async I/O traits.
 ///
-/// This type is similar to [`std::sync::Mutex`], except locking is an asynchronous operation.
+/// This is a blocking mutex that adds the following impls:
 ///
+/// - `impl<T> AsyncRead for Mutex<T> where &T: AsyncRead + Unpin {}`
+/// - `impl<T> AsyncRead for &Mutex<T> where &T: AsyncRead + Unpin {}`
+/// - `impl<T> AsyncWrite for Mutex<T> where &T: AsyncWrite + Unpin {}`
+/// - `impl<T> AsyncWrite for &Mutex<T> where &T: AsyncWrite + Unpin {}`
+///
+/// This mutex is ensures fairness by handling lock operations in the first-in first-out order.
+///
+/// While primarily designed for wrapping async I/O objects, this mutex can also be used as a
+/// regular blocking mutex. It's not quite as efficient as [`parking_lot::Mutex`], but it's still
+/// an improvement over [`std::sync::Mutex`].
+///
+/// [`parking_lot::Mutex`]: https://docs.rs/parking_lot/0.10.0/parking_lot/type.Mutex.html
 /// [`std::sync::Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 ///
 /// # Examples
 ///
 /// ```
-/// # smol::run(async {
-/// #
+/// use futures::io;
+/// use futures::prelude::*;
 /// use piper::Mutex;
-/// use smol::Task;
-/// use std::sync::Arc;
 ///
-/// let m = Arc::new(Mutex::new(0));
-/// let mut tasks = vec![];
-///
-/// for _ in 0..10 {
-///     let m = m.clone();
-///     tasks.push(Task::spawn(async move {
-///         *m.lock().await += 1;
-///     }));
+/// // Reads data from a stream and echoes it back.
+/// async fn echo(stream: impl AsyncRead + AsyncWrite + Unpin) -> io::Result<u64> {
+///     let stream = Mutex::new(stream);
+///     io::copy(&stream, &mut &stream).await
 /// }
-///
-/// for t in tasks {
-///     t.await;
-/// }
-/// assert_eq!(*m.lock().await, 10);
-/// #
-/// # })
 /// ```
 pub struct Mutex<T> {
+    /// Set to `true` when the mutex is acquired by a `MutexGuard`.
     locked: AtomicBool,
+
+    /// Lock operations waiting for the mutex to get unlocked.
     lock_ops: Event,
+
+    /// The value inside the mutex.
     data: UnsafeCell<T>,
 }
 
@@ -47,14 +56,14 @@ unsafe impl<T: Send> Send for Mutex<T> {}
 unsafe impl<T: Send> Sync for Mutex<T> {}
 
 impl<T> Mutex<T> {
-    /// Creates a new async mutex.
+    /// Creates a new mutex.
     ///
     /// # Examples
     ///
     /// ```
     /// use piper::Mutex;
     ///
-    /// let mutex = Mutex::new(0);
+    /// let mutex = Mutex::new(10);
     /// ```
     pub fn new(data: T) -> Mutex<T> {
         Mutex {
@@ -64,28 +73,31 @@ impl<T> Mutex<T> {
         }
     }
 
-    /// Acquires the mutex.
+    /// Acquires the mutex, blocking the current thread until it is able to do so.
     ///
     /// Returns a guard that releases the mutex when dropped.
     ///
     /// # Examples
     ///
     /// ```
-    /// # smol::block_on(async {
-    /// #
     /// use piper::Mutex;
     ///
     /// let mutex = Mutex::new(10);
-    /// let guard = mutex.lock().await;
+    /// let guard = mutex.lock();
     /// assert_eq!(*guard, 10);
-    /// #
-    /// # })
     /// ```
-    pub async fn lock(&self) -> MutexGuard<'_, T> {
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         loop {
             // Try locking the mutex.
-            if let Some(guard) = self.try_lock() {
-                return guard;
+            let backoff = Backoff::new();
+            loop {
+                if let Some(guard) = self.try_lock() {
+                    return guard;
+                }
+                if backoff.is_completed() {
+                    break;
+                }
+                backoff.snooze();
             }
 
             // Start watching for notifications and try locking again.
@@ -93,7 +105,7 @@ impl<T> Mutex<T> {
             if let Some(guard) = self.try_lock() {
                 return guard;
             }
-            l.await;
+            l.wait();
         }
     }
 
@@ -146,15 +158,11 @@ impl<T> Mutex<T> {
     /// # Examples
     ///
     /// ```
-    /// # smol::block_on(async {
-    /// #
     /// use piper::Mutex;
     ///
     /// let mut mutex = Mutex::new(0);
     /// *mutex.get_mut() = 10;
-    /// assert_eq!(*mutex.lock().await, 10);
-    /// #
-    /// # })
+    /// assert_eq!(*mutex.lock(), 10);
     /// ```
     pub fn get_mut(&mut self) -> &mut T {
         unsafe { &mut *self.data.get() }
@@ -186,6 +194,62 @@ impl<T> From<T> for Mutex<T> {
 impl<T: Default> Default for Mutex<T> {
     fn default() -> Mutex<T> {
         Mutex::new(Default::default())
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Mutex<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for &Mutex<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Mutex<T> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.lock()).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.lock()).poll_close(cx)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for &Mutex<T> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.lock()).poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut *self.lock()).poll_close(cx)
     }
 }
 
