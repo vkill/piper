@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::io;
+use std::io::{self, IoSlice, IoSliceMut};
 use std::mem;
 use std::pin::Pin;
 use std::slice;
@@ -134,6 +134,14 @@ impl AsyncRead for Reader {
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut &*self).poll_read(cx, buf)
     }
+
+    fn poll_read_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &*self).poll_read_vectored(cx, bufs)
+    }
 }
 
 impl AsyncWrite for Writer {
@@ -143,6 +151,14 @@ impl AsyncWrite for Writer {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut &*self).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &*self).poll_write_vectored(cx, bufs)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
