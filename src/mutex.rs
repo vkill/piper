@@ -1,5 +1,6 @@
 use std::cell::UnsafeCell;
 use std::fmt;
+use std::io::{IoSlice, IoSliceMut};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -205,6 +206,14 @@ impl<T: AsyncRead + Unpin> AsyncRead for Mutex<T> {
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut *self.lock()).poll_read(cx, buf)
     }
+
+    fn poll_read_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_read_vectored(cx, bufs)
+    }
 }
 
 impl<T: AsyncRead + Unpin> AsyncRead for &Mutex<T> {
@@ -215,6 +224,14 @@ impl<T: AsyncRead + Unpin> AsyncRead for &Mutex<T> {
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut *self.lock()).poll_read(cx, buf)
     }
+
+    fn poll_read_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_read_vectored(cx, bufs)
+    }
 }
 
 impl<T: AsyncWrite + Unpin> AsyncWrite for Mutex<T> {
@@ -224,6 +241,14 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for Mutex<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut *self.lock()).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_write_vectored(cx, bufs)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -242,6 +267,14 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for &Mutex<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut *self.lock()).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut *self.lock()).poll_write_vectored(cx, bufs)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {

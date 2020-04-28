@@ -1,5 +1,6 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::io::{IoSlice, IoSliceMut};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -128,6 +129,14 @@ where
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut &*self.0).poll_read(cx, buf)
     }
+
+    fn poll_read_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &mut [IoSliceMut<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &*self.0).poll_read_vectored(cx, bufs)
+    }
 }
 
 impl<T> AsyncWrite for Arc<T>
@@ -140,6 +149,14 @@ where
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         Pin::new(&mut &*self.0).poll_write(cx, buf)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut &*self.0).poll_write_vectored(cx, bufs)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
