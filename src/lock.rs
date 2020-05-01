@@ -10,30 +10,32 @@ use crate::event::Event;
 ///
 /// This type is similar to [`std::sync::Mutex`], except locking is an asynchronous operation.
 ///
+/// Note that [`Lock`] by itself acts like an [`Arc`] in the sense that cloning it returns just
+/// another reference to the same lock.
+///
+/// Furthermore, [`LockGuard`] is not tied to [`Lock`] by a lifetime, so you can keep guards for
+/// as long as you want. This is useful when you want to spawn a task and move a guard into its
+/// future.
+///
 /// # Examples
 ///
 /// ```
 /// # smol::run(async {
-/// #
 /// use piper::Lock;
 /// use smol::Task;
-/// use std::sync::Arc;
 ///
-/// let l = Arc::new(Lock::new(0));
+/// let lock = Lock::new(0);
 /// let mut tasks = vec![];
 ///
 /// for _ in 0..10 {
-///     let l = l.clone();
-///     tasks.push(Task::spawn(async move {
-///         *l.lock().await += 1;
-///     }));
+///     let lock = lock.clone();
+///     tasks.push(Task::spawn(async move { *lock.lock().await += 1 }));
 /// }
 ///
-/// for t in tasks {
-///     t.await;
+/// for task in tasks {
+///     task.await;
 /// }
-/// assert_eq!(*l.lock().await, 10);
-/// #
+/// assert_eq!(*lock.lock().await, 10);
 /// # })
 /// ```
 pub struct Lock<T>(Arc<Inner<T>>);
@@ -44,9 +46,15 @@ impl<T> Clone for Lock<T> {
     }
 }
 
+/// Data inside [`Lock`].
 struct Inner<T> {
+    /// Set to `true` when the lock is acquired by a [`LockGuard`].
     locked: AtomicBool,
+
+    /// Lock operations waiting for the lock to be released.
     lock_ops: Event,
+
+    /// The value inside the lock.
     data: UnsafeCell<T>,
 }
 
@@ -61,7 +69,7 @@ impl<T> Lock<T> {
     /// ```
     /// use piper::Lock;
     ///
-    /// let l = Lock::new(0);
+    /// let lock = Lock::new(0);
     /// ```
     pub fn new(data: T) -> Lock<T> {
         Lock(Arc::new(Inner {
@@ -79,13 +87,11 @@ impl<T> Lock<T> {
     ///
     /// ```
     /// # smol::block_on(async {
-    /// #
     /// use piper::Lock;
     ///
-    /// let l = Lock::new(10);
-    /// let guard = l.lock().await;
+    /// let lock = Lock::new(10);
+    /// let guard = lock.lock().await;
     /// assert_eq!(*guard, 10);
-    /// #
     /// # })
     /// ```
     pub async fn lock(&self) -> LockGuard<T> {
@@ -96,11 +102,11 @@ impl<T> Lock<T> {
             }
 
             // Start watching for notifications and try locking again.
-            let l = self.0.lock_ops.listen();
+            let listener = self.0.lock_ops.listen();
             if let Some(guard) = self.try_lock() {
                 return guard;
             }
-            l.await;
+            listener.await;
         }
     }
 
@@ -109,15 +115,13 @@ impl<T> Lock<T> {
     /// If the lock could not be acquired at this time, then [`None`] is returned. Otherwise, a
     /// guard is returned that releases the lock when dropped.
     ///
-    /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
-    ///
     /// # Examples
     ///
     /// ```
     /// use piper::Lock;
     ///
-    /// let l = Lock::new(10);
-    /// if let Ok(guard) = l.try_lock() {
+    /// let lock = Lock::new(10);
+    /// if let Some(guard) = lock.try_lock() {
     ///     assert_eq!(*guard, 10);
     /// }
     /// # ;

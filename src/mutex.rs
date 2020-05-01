@@ -43,7 +43,7 @@ use futures::io::{self, AsyncRead, AsyncWrite};
 /// }
 /// ```
 pub struct Mutex<T> {
-    /// Set to `true` when the mutex is acquired by a `MutexGuard`.
+    /// Set to `true` when the mutex is acquired by a [`MutexGuard`].
     locked: AtomicBool,
 
     /// Lock operations waiting for the mutex to get unlocked.

@@ -1,7 +1,9 @@
 //! A synchronization primitive for notifying async tasks and threads.
 //!
-//! This is a variant of a conditional variable that is heavily inspired by eventcounts invented
-//! by Dmitry Vyukov: http://www.1024cores.net/home/lock-free-algorithms/eventcounts
+//! This is a variant of a conditional variable that is heavily inspired by [eventcounts] invented
+//! by Dmitry Vyukov.
+//!
+//! [eventcounts]: http://www.1024cores.net/home/lock-free-algorithms/eventcounts
 
 use std::cell::Cell;
 use std::future::Future;
@@ -14,15 +16,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::thread::{self, Thread};
 
-/// A bit set inside `Event` when there is at least one listener that has already been notified.
+/// A bit set inside [`Event`] when there is at least one listener that has already been notified.
 const NOTIFIED: usize = 1 << 0;
 
-/// A bit set inside `Event` when there is at least one notifiable listener.
+/// A bit set inside [`Event`] when there is at least one notifiable listener.
 const NOTIFIABLE: usize = 1 << 1;
 
-/// Inner state of `Event`.
+/// Inner state of [`Event`].
 struct Inner {
-    /// Holds bits `NOTIFIED` and `NOTIFIABLE`.
+    /// Holds bits [`NOTIFIED`] and [`NOTIFIABLE`].
     flags: AtomicUsize,
 
     /// A linked list holding registered listeners.
@@ -41,20 +43,21 @@ impl Inner {
 
 /// A synchronization primitive for notifying async tasks and threads.
 ///
-/// Listeners can be registered using `listen()`. There are two ways of notifying listeners:
+/// Listeners can be registered using [`listen()`][`Event::listen()`]. There are two ways of
+/// notifying listeners:
 ///
-/// 1. `notify_one()` notifies one listener.
-/// 2. `notify_all()` notifies all listeners.
+/// 1. [`notify_one()`][`Event::notify_one()`] notifies one listener.
+/// 2. [`notify_all()`][`Event::notify_all()`] notifies all listeners.
 ///
 /// If there are no active listeners at the time a notification is sent, it simply gets lost.
 ///
-/// Note that `notify_one()` does not notify one *additional* listener - it only makes sure
-/// *at least* one listener among the active ones is notified.
+/// Note that [`notify_one()`][`Event::notify_one()`] does not notify one *additional* listener -
+/// it only makes sure *at least* one listener among the active ones is notified.
 ///
 /// There are two ways for a listener to wait for a notification:
 ///
 /// 1. In an asynchronous manner using `.await`.
-/// 2. In a blocking manner by calling `wait()` on it.
+/// 2. In a blocking manner by calling [`wait()`][`EventListener::wait()`] on it.
 ///
 /// If a notified listener is dropped without ever waiting for a notification, dropping will notify
 /// another another active listener.
@@ -64,7 +67,7 @@ pub struct Event {
     /// A pointer to heap-allocated inner state.
     ///
     /// This pointer is initially null and gets lazily initialized on first use. Semantically, it
-    /// is an `Arc<Inner>` so it's important to keep in mind that it contributes to the `Arc`s
+    /// is an `Arc<Inner>` so it's important to keep in mind that it contributes to the [`Arc`]'s
     /// reference count.
     inner: AtomicPtr<Inner>,
 }
@@ -73,7 +76,7 @@ unsafe impl Send for Event {}
 unsafe impl Sync for Event {}
 
 impl Event {
-    /// Creates a new `Event`.
+    /// Creates a new [`Event`].
     #[inline]
     pub fn new() -> Event {
         Event {
@@ -186,17 +189,17 @@ impl Default for Event {
     }
 }
 
-/// A guard waiting for a notification from an `Event`.
+/// A guard waiting for a notification from an [`Event`].
 ///
 /// There are two ways for a listener to wait for a notification:
 ///
 /// 1. In an asynchronous manner using `.await`.
-/// 2. In a blocking manner by calling `wait()` on it.
+/// 2. In a blocking manner by calling [`wait()`][`EventListener::wait()`] on it.
 ///
 /// If a notified listener is dropped without ever waiting for a notification, dropping will notify
 /// another another active listener.
 pub struct EventListener {
-    /// A reference to `Event`s inner state.
+    /// A reference to [`Event`]'s inner state.
     inner: Arc<Inner>,
 
     /// A pointer to this listener's entry in the linked list.
@@ -308,7 +311,7 @@ impl Drop for EventListener {
 
 /// A guard holding the linked list locked.
 struct ListGuard<'a> {
-    /// A reference to `Event`s inner state.
+    /// A reference to [`Event`]'s inner state.
     inner: &'a Inner,
 
     /// The actual guard that acquired the linked list.
@@ -367,7 +370,7 @@ enum State {
 }
 
 impl State {
-    /// Returns `true` if this is the `Notified` state.
+    /// Returns `true` if this is the [`Notified`] state.
     #[inline]
     fn is_notified(&self) -> bool {
         match self {
