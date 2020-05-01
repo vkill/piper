@@ -124,7 +124,11 @@ impl<T> Lock<T> {
     /// ```
     #[inline]
     pub fn try_lock(&self) -> Option<LockGuard<T>> {
-        if !self.0.locked.compare_and_swap(false, true, Ordering::Acquire) {
+        if !self
+            .0
+            .locked
+            .compare_and_swap(false, true, Ordering::Acquire)
+        {
             Some(LockGuard(self.0.clone()))
         } else {
             None
