@@ -1,4 +1,5 @@
 use std::cell::UnsafeCell;
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::isize;
@@ -13,6 +14,7 @@ use std::task::{Context, Poll};
 
 use crossbeam_utils::Backoff;
 use futures::future;
+use futures::sink::Sink;
 use futures::stream::Stream;
 
 use crate::event::{Event, EventListener};
@@ -60,10 +62,12 @@ pub fn chan<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
     let channel = Arc::new(Channel::with_capacity(cap));
     let s = Sender {
         channel: channel.clone(),
+        buffer: VecDeque::new(),
+        listener: None,
     };
     let r = Receiver {
         channel,
-        next_listener: None,
+        listener: None,
     };
     (s, r)
 }
@@ -98,7 +102,18 @@ pub fn chan<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
 pub struct Sender<T> {
     /// The inner channel.
     channel: Arc<Channel<T>>,
+
+    /// The sink buffer.
+    ///
+    /// Messages sent into this sender as a sink are first buffered, and then they get sent into
+    /// the channel when the sink is flushed.
+    buffer: VecDeque<T>,
+
+    /// Listens for a receive or handoff event that will unblock this sink.
+    listener: Option<EventListener>,
 }
+
+impl<T> Unpin for Sender<T> {}
 
 impl<T> Sender<T> {
     /// Sends a message into the channel.
@@ -233,7 +248,104 @@ impl<T> Clone for Sender<T> {
 
         Sender {
             channel: self.channel.clone(),
+            buffer: VecDeque::new(),
+            listener: None,
         }
+    }
+}
+
+impl<T> Sink<T> for Sender<T> {
+    type Error = std::convert::Infallible;
+
+    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        if self.buffer.is_empty() {
+            Poll::Ready(Ok(()))
+        } else {
+            // If there are messages in the buffer, we should encourage the user to flush the sink
+            // rather than sending more messages into the sink.
+            Poll::Pending
+        }
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, msg: T) -> Result<(), Self::Error> {
+        // Sending simply involves pushing the message into the sink's buffer.
+        self.buffer.push_back(msg);
+        Ok(())
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        loop {
+            // If this sink is blocked on an event, first make sure it is unblocked.
+            if let Some(listener) = self.listener.as_mut() {
+                futures::ready!(Pin::new(listener).poll(cx));
+                self.listener = None;
+            }
+
+            loop {
+                // Get the next message from the buffer.
+                let msg = match self.buffer.pop_front() {
+                    None => return Poll::Ready(Ok(())),
+                    Some(msg) => msg,
+                };
+
+                // Attempt to send the message.
+                match self.channel.try_send(msg) {
+                    Ok(stamp) => {
+                        // The sink is not blocked on an event - drop the listener.
+                        self.listener = None;
+
+                        // If this is a zero-capacity channel, we need to wait for the receiver to
+                        // confirm the message was received.
+                        if let Some(h) = &self.channel.handoff {
+                            // The buffer capacity is 1, so pointer to the channel buffer matches
+                            // the pointer to the first (and only) slot in it.
+                            let slot_stamp = unsafe { &(*self.channel.buffer).stamp };
+
+                            // If the stamp didn't change, the message was not received yet.
+                            if slot_stamp.load(Ordering::SeqCst) == stamp {
+                                // Listen for a handoff event.
+                                let listener = h.listen();
+
+                                // Check again.
+                                if slot_stamp.load(Ordering::SeqCst) == stamp {
+                                    // Now we're really blocked on handoff - store this listener
+                                    // and go back to the outer loop.
+                                    self.listener = Some(listener);
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Continue the inner loop to send the next message...
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        // The sink is not blocked on an event - drop the listener.
+                        self.listener = None;
+                        return Poll::Pending;
+                    }
+                    Err(TrySendError::Full(m)) => {
+                        // The buffer is full - put the message back into the buffer.
+                        self.buffer.push_front(m);
+
+                        // Listen for a receive event.
+                        match self.listener.as_mut() {
+                            None => {
+                                // Store a listener and try sending the message again.
+                                self.listener = Some(self.channel.sink_ops.listen());
+                            }
+                            Some(_) => {
+                                // Go back to the outer loop to poll the listener.
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.poll_flush(cx)
     }
 }
 
@@ -280,8 +392,10 @@ pub struct Receiver<T> {
     channel: Arc<Channel<T>>,
 
     /// The key for this receiver in the `channel.next_ops` set. TODO
-    next_listener: Option<EventListener>,
+    listener: Option<EventListener>,
 }
+
+impl<T> Unpin for Receiver<T> {}
 
 impl<T> Receiver<T> {
     /// TODO
@@ -422,7 +536,7 @@ impl<T> Clone for Receiver<T> {
 
         Receiver {
             channel: self.channel.clone(),
-            next_listener: None,
+            listener: None,
         }
     }
 }
@@ -431,32 +545,42 @@ impl<T> Stream for Receiver<T> {
     type Item = T;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let poll = loop {
-            match self.channel.try_recv() {
-                Ok(msg) => break Poll::Ready(Some(msg)),
-                Err(TryRecvError::Disconnected) => break Poll::Ready(None),
-                Err(TryRecvError::Empty) => {}
+        loop {
+            // If this stream is blocked on an event, first make sure it is unblocked.
+            if let Some(listener) = self.listener.as_mut() {
+                futures::ready!(Pin::new(listener).poll(cx));
+                self.listener = None;
             }
 
-            self.next_listener = Some(self.channel.next_ops.listen());
+            loop {
+                // Attempt to receive a message.
+                match self.channel.try_recv() {
+                    Ok(msg) => {
+                        // The stream is not blocked on an event - drop the listener.
+                        self.listener = None;
+                        return Poll::Ready(Some(msg));
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        // The stream is not blocked on an event - drop the listener.
+                        self.listener = None;
+                        return Poll::Ready(None);
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
 
-            match self.channel.try_recv() {
-                Ok(msg) => break Poll::Ready(Some(msg)),
-                Err(TryRecvError::Disconnected) => break Poll::Ready(None),
-                Err(TryRecvError::Empty) => {}
+                // Listen for a send event.
+                match self.listener.as_mut() {
+                    None => {
+                        // Store a listener and try sending the message again.
+                        self.listener = Some(self.channel.next_ops.listen());
+                    }
+                    Some(_) => {
+                        // Go back to the outer loop to poll the listener.
+                        break;
+                    }
+                }
             }
-
-            match Pin::new(self.next_listener.as_mut().unwrap()).poll(cx) {
-                Poll::Ready(()) => {}
-                Poll::Pending => return Poll::Pending,
-            }
-        };
-
-        if self.next_listener.take().is_some() {
-            self.channel.next_ops.notify_all();
         }
-
-        poll
     }
 }
 
@@ -510,6 +634,9 @@ struct Channel<T> {
 
     /// Send operations waiting while the channel is full.
     send_ops: Event,
+
+    /// Sink operations waiting while the channel is full.
+    sink_ops: Event,
 
     /// TODO
     handoff: Option<Event>,
@@ -575,6 +702,7 @@ impl<T> Channel<T> {
             head: AtomicUsize::new(head),
             tail: AtomicUsize::new(tail),
             send_ops: Event::new(),
+            sink_ops: Event::new(),
             handoff,
             recv_ops: Event::new(),
             next_ops: Event::new(),
@@ -692,12 +820,13 @@ impl<T> Channel<T> {
         };
 
         if let Some(h) = &self.handoff {
-            let mut listener = None;
+            let slot_stamp = unsafe { &(*self.buffer).stamp };
 
-            while unsafe { &*self.buffer }.stamp.load(Ordering::SeqCst) != stamp {
-                match listener.take() {
-                    None => listener = Some(h.listen()),
-                    Some(w) => w.await,
+            if slot_stamp.load(Ordering::SeqCst) == stamp {
+                let listener = h.listen();
+
+                if slot_stamp.load(Ordering::SeqCst) == stamp {
+                    listener.await;
                 }
             }
         }
@@ -745,7 +874,10 @@ impl<T> Channel<T> {
                         // Wake a blocked send operation.
                         self.send_ops.notify_one();
 
-                        // Notify a send operation waiting for handoff.
+                        // Wake all blocked sinks.
+                        self.sink_ops.notify_all();
+
+                        // Notify send operations waiting for handoff.
                         if let Some(h) = &self.handoff {
                             h.notify_all();
                         }
@@ -860,8 +992,12 @@ impl<T> Channel<T> {
         if tail & self.mark_bit == 0 {
             // Notify everyone blocked on this channel.
             self.send_ops.notify_all();
+            self.sink_ops.notify_all();
             self.recv_ops.notify_all();
             self.next_ops.notify_all();
+            if let Some(h) = &self.handoff {
+                h.notify_all();
+            }
         }
     }
 }
