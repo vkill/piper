@@ -12,4 +12,4 @@ crossbeam-utils = "0.7.0"
 futures = { version = "0.3.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-smol = { git = "ssh://git@github.com/stjepang/smol.git" }
+smol = { git = "https://github.com/stjepang/smol.git" }
