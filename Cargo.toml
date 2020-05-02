@@ -3,7 +3,7 @@ name = "piper"
 version = "0.1.1"
 authors = ["Stjepan Glavina <stjepang@gmail.com>"]
 edition = "2018"
-description = "WIP"
+description = "Async pipes, channels, mutexes, and more."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/stjepang/piper"
 
