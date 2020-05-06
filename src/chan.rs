@@ -150,9 +150,7 @@ impl<T> Sender<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_std::sync::channel;
-    ///
-    /// let (s, _) = channel::<i32>(5);
+    /// let (s, _) = piper::chan::<i32>(5);
     /// assert_eq!(s.capacity(), 5);
     /// ```
     pub fn capacity(&self) -> usize {
@@ -168,11 +166,9 @@ impl<T> Sender<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    ///
-    /// let (s, r) = channel(1);
+    /// let (s, r) = piper::chan::<i32>(1);
     ///
     /// assert!(s.is_empty());
     /// s.send(0).await;
@@ -189,11 +185,9 @@ impl<T> Sender<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    ///
-    /// let (s, r) = channel(1);
+    /// let (s, r) = piper::chan::<i32>(1);
     ///
     /// assert!(!s.is_full());
     /// s.send(0).await;
@@ -210,11 +204,9 @@ impl<T> Sender<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    ///
-    /// let (s, r) = channel(2);
+    /// let (s, r) = piper::chan::<i32>(2);
     /// assert_eq!(s.len(), 0);
     ///
     /// s.send(1).await;
@@ -438,9 +430,7 @@ impl<T> Receiver<T> {
     /// # Examples
     ///
     /// ```
-    /// use async_std::sync::channel;
-    ///
-    /// let (_, r) = channel::<i32>(5);
+    /// let (_, r) = piper::chan::<i32>(5);
     /// assert_eq!(r.capacity(), 5);
     /// ```
     pub fn capacity(&self) -> usize {
@@ -456,11 +446,9 @@ impl<T> Receiver<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    ///
-    /// let (s, r) = channel(1);
+    /// let (s, r) = piper::chan::<i32>(1);
     ///
     /// assert!(r.is_empty());
     /// s.send(0).await;
@@ -477,11 +465,9 @@ impl<T> Receiver<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    ///
-    /// let (s, r) = channel(1);
+    /// let (s, r) = piper::chan::<i32>(1);
     ///
     /// assert!(!r.is_full());
     /// s.send(0).await;
@@ -498,11 +484,9 @@ impl<T> Receiver<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    ///
-    /// let (s, r) = channel(2);
+    /// let (s, r) = piper::chan::<i32>(2);
     /// assert_eq!(r.len(), 0);
     ///
     /// s.send(1).await;

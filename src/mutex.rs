@@ -123,7 +123,7 @@ impl<T> Mutex<T> {
     /// use piper::Mutex;
     ///
     /// let mutex = Mutex::new(10);
-    /// if let Ok(guard) = mutex.try_lock() {
+    /// if let Some(guard) = mutex.try_lock() {
     ///     assert_eq!(*guard, 10);
     /// }
     /// # ;

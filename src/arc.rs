@@ -49,7 +49,7 @@ impl<T> Arc<T> {
     ///
     /// // These two lines are equivalent:
     /// let a = Arc::new(7);
-    /// let a = Arc(sync::Arc::new(7));
+    /// let a = Arc::new(sync::Arc::new(7));
     /// ```
     pub fn new(data: T) -> Arc<T> {
         Arc(std::sync::Arc::new(data))
