@@ -34,25 +34,23 @@ use crate::event::{Event, EventListener};
 /// # Examples
 ///
 /// ```
-/// # async_std::task::block_on(async {
+/// # smol::block_on(async {
 /// #
 /// use std::time::Duration;
 ///
-/// use async_std::sync::channel;
-/// use async_std::task;
 ///
-/// let (s, r) = channel(1);
+/// let (s, r) = piper::chan::<i32>(1);
 ///
 /// // This call returns immediately because there is enough space in the channel.
 /// s.send(1).await;
 ///
-/// task::spawn(async move {
+/// smol::Task::spawn(async move {
 ///     // This call will have to wait because the channel is full.
 ///     // It will be able to complete only after the first message is received.
 ///     s.send(2).await;
 /// });
 ///
-/// task::sleep(Duration::from_secs(1)).await;
+/// smol::Timer::after(Duration::from_secs(1)).await;
 /// assert_eq!(r.recv().await, Some(1));
 /// assert_eq!(r.recv().await, Some(2));
 /// #
@@ -81,16 +79,14 @@ pub fn chan<T>(cap: usize) -> (Sender<T>, Receiver<T>) {
 /// # Examples
 ///
 /// ```
-/// # async_std::task::block_on(async {
+/// # smol::block_on(async {
 /// #
-/// use async_std::sync::channel;
-/// use async_std::task;
 ///
-/// let (s1, r) = channel(100);
+/// let (s1, r) = piper::chan::<i32>(100);
 /// let s2 = s1.clone();
 ///
-/// task::spawn(async move { s1.send(1).await });
-/// task::spawn(async move { s2.send(2).await });
+/// smol::Task::spawn(async move { s1.send(1).await });
+/// smol::Task::spawn(async move { s2.send(2).await });
 ///
 /// let msg1 = r.recv().await.unwrap();
 /// let msg2 = r.recv().await.unwrap();
@@ -123,14 +119,12 @@ impl<T> Sender<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    /// use async_std::task;
     ///
-    /// let (s, r) = channel(1);
+    /// let (s, r) = piper::chan::<i32>(1);
     ///
-    /// task::spawn(async move {
+    /// smol::Task::spawn(async move {
     ///     s.send(1).await;
     ///     s.send(2).await;
     /// });
@@ -359,18 +353,16 @@ impl<T> fmt::Debug for Sender<T> {
 /// # Examples
 ///
 /// ```
-/// # async_std::task::block_on(async {
+/// # smol::block_on(async {
 /// #
 /// use std::time::Duration;
 ///
-/// use async_std::sync::channel;
-/// use async_std::task;
 ///
-/// let (s, r) = channel(100);
+/// let (s, r) = piper::chan::<i32>(100);
 ///
-/// task::spawn(async move {
+/// smol::Task::spawn(async move {
 ///     s.send(1).await;
-///     task::sleep(Duration::from_secs(1)).await;
+///     smol::Timer::after(Duration::from_secs(1)).await;
 ///     s.send(2).await;
 /// });
 ///
@@ -403,14 +395,12 @@ impl<T> Receiver<T> {
     /// # Examples
     ///
     /// ```
-    /// # async_std::task::block_on(async {
+    /// # smol::block_on(async {
     /// #
-    /// use async_std::sync::channel;
-    /// use async_std::task;
     ///
-    /// let (s, r) = channel(1);
+    /// let (s, r) = piper::chan::<i32>(1);
     ///
-    /// task::spawn(async move {
+    /// smol::Task::spawn(async move {
     ///     s.send(1).await;
     ///     s.send(2).await;
     /// });
